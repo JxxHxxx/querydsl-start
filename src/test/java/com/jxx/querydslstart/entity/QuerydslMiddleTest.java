@@ -8,15 +8,16 @@ import com.querydsl.core.types.ExpressionUtils;
 import com.querydsl.core.types.Predicate;
 import com.querydsl.core.types.Projections;
 import com.querydsl.core.types.dsl.BooleanExpression;
+import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.criteria.CriteriaBuilder;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.Commit;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -255,5 +256,90 @@ public class QuerydslMiddleTest {
 
     private BooleanExpression allEq(String usernameCond, Integer ageCond) {
         return usernameEqV2(usernameCond).and(ageEqV2(ageCond));
+    }
+
+    /**
+     * JPA를 사용한다면 벌크 연산은 조심해야 하는 것이 있다.
+     * 벌크연산은 JPA를 무시하고 바로 DB와 connection 한다.
+     * 따라 JPA 영속성 컨텍스트와 DB가 동기화 되어 있지 않을 수 있다.
+     */
+
+    @Test
+    void bulkUpdate() {
+        queryFactory
+                .update(member)
+                .set(member.username, "비회원")
+                .where(member.age.lt(28))
+                .execute();
+
+        em.flush();
+        em.clear();
+        // member1 = 10 -> Persist Context member1 | DB 비회원
+        // member2 = 20 -> Persist Context member2 | DB 비회원
+        // member3 = 30 -> Persist Context member3 | DB member3
+        // member4 = 40 -> Persist Context member4 | DB member4
+
+        List<Member> result = queryFactory.select(member)
+                .from(member).fetch();
+
+        for (Member member1 : result) {
+            System.out.println("member1 = " + member1);
+        }
+
+        Assertions.assertThat(result.size()).isEqualTo(1);
+    }
+
+    @Test
+    void bulkAdd() {
+        queryFactory
+                .update(member)
+                .set(member.age, member.age.add(1))
+                .execute();
+
+        em.flush();
+        em.clear();
+
+        List<Member> results = queryFactory
+                .select(member)
+                .from(member)
+                .fetch();
+
+        for (Member result : results) {
+            System.out.println("result = " + result);
+        }
+    }
+
+    @Test
+    void sqlFunction() {
+        List<String> result = queryFactory
+                .select(
+                        Expressions.stringTemplate(
+                                "function('replace', {0}, {1}, {2})",
+                                member.username, "member", "M")
+                )
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    /**
+     * 대부분의 DB에서 사용할 수 있는 내장 함수는 Querydsl에도 기본적으로 내장되어 있다.
+     */
+    @Test
+    void sqlFunction2() {
+        List<String> result = queryFactory
+                .select(member.username)
+                .from(member)
+//                .where(member.username.eq(
+//                        Expressions.stringTemplate("function('lower', {0})", member.username)
+                .where(member.username.eq(member.username.lower())
+                ).fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
     }
 }
